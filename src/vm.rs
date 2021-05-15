@@ -1,101 +1,26 @@
 //! Stack-based VM
 
-use std::collections::HashMap;
+use crate::data::Value;
+use crate::program::{Function, Instruction, Module};
+use std::sync::{Arc, Mutex};
 
-// program
-
-#[derive(Debug)]
-pub enum Instruction {
-    /// Print the top-most item on the stack
-    Print,
-
-    /// Push a literal value
-    PushLiteral(Value),
-
-    /// Duplicate the i'th item from the top of the stack
-    Dup(usize),
-
-    /// Discard the top item on the stack
-    Pop,
-
-    /// Swap the top item on the stack with the i'th item from the top of the stack
-    Swap(usize),
-
-    /// Jump, unconditionally, to an instruction in this function
-    Jump(usize),
-
-    /// Pop the value off the stack and jump if it is equal to the given value
-    JumpIfEqual(usize, Value),
-
-    /// Call another function, popping its arg_size arguments from the stack
-    Call(&'static str),
-
-    /// Return to the calling function, pushing this function's stack onto
-    /// the caller's stack.
-    Return,
-
-    /// Add the top two values on the stack, leaving the sum
-    Add,
-
-    /// Multiply the top two values on the stack, leaving the product
-    Mul,
-}
+// process
 
 #[derive(Debug)]
-pub struct Function {
-    pub arg_count: usize,
-    pub stack_size: usize,
-    pub instructions: Vec<Instruction>,
-}
-
-#[derive(Default)]
-pub struct Module {
-    pub functions: HashMap<String, Function>,
-}
-
-// data
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    Str(&'static str),
-    Int(i64),
-}
-
-// execution
-
-#[derive(Debug)]
-struct ExecutionContext<'pr> {
-    pub parent: Option<Box<ExecutionContext<'pr>>>,
-    pub function: &'pr Function,
+struct ProcessContext {
+    pub parent: Option<Box<ProcessContext>>,
+    pub function: Arc<Function>,
     pub stack: Vec<Value>,
     pub instruction: usize,
 }
 
-pub struct Execution<'pr> {
-    module: &'pr Module,
-    call_stack: Option<Box<ExecutionContext<'pr>>>,
+pub struct Process {
+    vm: VM,
+    call_stack: Option<Box<ProcessContext>>,
 }
 
-impl<'pr> Execution<'pr> {
-    pub fn new(module: &'pr Module) -> Execution {
-        let function = module
-            .functions
-            .get("init")
-            .expect("no function named 'init'");
-        debug_assert_eq!(function.arg_count, 0, "'init' must take no arguments");
-        let context = Box::new(ExecutionContext {
-            parent: None,
-            function,
-            stack: Vec::with_capacity(function.stack_size),
-            instruction: 0,
-        });
-        Self {
-            module,
-            call_stack: Some(context),
-        }
-    }
-
-    pub fn run(&mut self) {
+impl Process {
+    async fn run(mut self) {
         use Instruction::*;
         loop {
             let ctxt = &mut self.call_stack.as_mut().expect("call stack is empty");
@@ -139,11 +64,20 @@ impl<'pr> Execution<'pr> {
                     }
                 }
                 Call(name) => {
-                    let function = self.module.functions.get(name).expect("Unknown function");
+                    let function = self
+                        .vm
+                        .0
+                        .lock()
+                        .unwrap()
+                        .module
+                        .functions
+                        .get(name)
+                        .expect("Unknown function")
+                        .clone();
                     debug_assert!(ctxt.stack.len() >= function.arg_count);
                     let mut stack = ctxt.stack.split_off(ctxt.stack.len() - function.arg_count);
                     stack.reserve(function.stack_size);
-                    self.call_stack = Some(Box::new(ExecutionContext {
+                    self.call_stack = Some(Box::new(ProcessContext {
                         parent: self.call_stack.take(),
                         function,
                         stack,
@@ -183,5 +117,49 @@ impl<'pr> Execution<'pr> {
                 }
             }
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct VM(Arc<Mutex<VMInner>>);
+
+pub struct VMInner {
+    module: Module,
+    //next_pid: u64,
+}
+
+impl VM {
+    pub fn new(module: Module) -> VM {
+        VM(Arc::new(Mutex::new(VMInner {
+            module,
+            //next_pid: 1,
+        })))
+    }
+
+    pub async fn run(&mut self) {
+        let function = self
+            .0
+            .lock()
+            .unwrap()
+            .module
+            .functions
+            .get("init")
+            .expect("no function named 'init'")
+            .clone();
+        debug_assert_eq!(function.arg_count, 0, "'init' must take no arguments");
+
+        let context = Box::new(ProcessContext {
+            parent: None,
+            function: function.clone(),
+            stack: Vec::with_capacity(function.stack_size),
+            instruction: 0,
+        });
+
+        let process = Process {
+            vm: self.clone(),
+            call_stack: Some(context),
+        };
+        let jh = tokio::spawn(process.run());
+        jh.await.unwrap();
     }
 }

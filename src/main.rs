@@ -1,14 +1,19 @@
+mod data;
+mod program;
 mod vm;
 
-use vm::*;
+use crate::data::Value;
+use crate::program::*;
+use crate::vm::VM;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     use Instruction::*;
 
     let mut module = Module::default();
 
-    module.functions.insert(
-        "init".to_owned(),
+    module.add_function(
+        "init",
         Function {
             arg_count: 0,
             stack_size: 3,
@@ -20,16 +25,16 @@ fn main() {
             ],
         },
     );
-    module.functions.insert(
-        "show".to_owned(),
+    module.add_function(
+        "show",
         Function {
             arg_count: 1,
             stack_size: 1,
             instructions: vec![Print, Return],
         },
     );
-    module.functions.insert(
-        "fib".to_owned(),
+    module.add_function(
+        "fib",
         Function {
             arg_count: 1,
             stack_size: 5,
@@ -61,6 +66,6 @@ fn main() {
         },
     );
 
-    let mut exec = Execution::new(&module);
-    exec.run();
+    let mut vm = VM::new(module);
+    vm.run().await;
 }
