@@ -3,7 +3,7 @@ mod program;
 mod vm;
 
 use crate::data::Value;
-use crate::program::*;
+use crate::program::{Function, Instruction, Module};
 use crate::vm::VM;
 
 #[tokio::main]
@@ -14,31 +14,51 @@ async fn main() {
 
     module.add_function(
         "init",
-        Function {
-            arg_count: 0,
-            stack_size: 3,
-            instructions: vec![
-                PushLiteral(Value::Int(6)),
-                Call("fib"),
-                Call("show"),
+        Function::new(
+            0,
+            3,
+            vec![
+                PushLiteral(Value::Int(20)),
+                Spawn("fibproc"),
+                Pop, // ignore the pid
+                PushLiteral(Value::Int(10)),
+                Spawn("fibproc"),
+                Pop, // ignore the pid
+                PushLiteral(Value::Int(2)),
+                Receive,      // get an answer
+                Call("show"), // show its value
+                Pop,          // pop the name
+                PushLiteral(Value::Int(-1)),
+                Add,
+                Dup(0),
+                JumpIfEqual(15, Value::Int(0)),
+                Jump(7),
+                Pop,
                 Return,
             ],
-        },
+        ),
     );
     module.add_function(
-        "show",
-        Function {
-            arg_count: 1,
-            stack_size: 1,
-            instructions: vec![Print, Return],
-        },
+        "fibproc",
+        Function::new(
+            1,
+            3,
+            vec![
+                Call("fib"),
+                PushLiteral(Value::Pid(0)),
+                Swap(1),
+                Send("result"),
+                Return,
+            ],
+        ),
     );
+    module.add_function("show", Function::new(1, 1, vec![Print, Return]));
     module.add_function(
         "fib",
-        Function {
-            arg_count: 1,
-            stack_size: 5,
-            instructions: vec![
+        Function::new(
+            1,
+            5,
+            vec![
                 Dup(0),
                 JumpIfEqual(16, Value::Int(0)),
                 Dup(0),
@@ -63,9 +83,9 @@ async fn main() {
                 PushLiteral(Value::Int(1)),
                 Return,
             ],
-        },
+        ),
     );
 
-    let mut vm = VM::new(module);
+    let vm = VM::new(module);
     vm.run().await;
 }
